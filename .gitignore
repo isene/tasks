@@ -1,0 +1,23 @@
+# Gradle / build
+.gradle/
+build/
+local.properties
+
+# Wrapper jar is committed deliberately — without it, ./gradlew
+# can't bootstrap and a fresh clone is unusable. Tiny binary
+# (~60KB) and reproducible from the wrapper version pin in
+# gradle-wrapper.properties.
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Signing
+*.jks
+*.keystore
+key.properties

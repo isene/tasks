@@ -2,11 +2,11 @@ package com.isene.tasks.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -76,8 +80,6 @@ fun TasksScreen(vm: TasksViewModel) {
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(vm::onFilePicked) }
 
-    // Reload-on-resume — picks up changes Syncthing made while the
-    // app was backgrounded without forcing a manual refresh.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
         val obs = LifecycleEventObserver { _, e ->
@@ -95,12 +97,16 @@ fun TasksScreen(vm: TasksViewModel) {
         }
     }
 
+    // Dialog state
     var showAddCategory by remember { mutableStateOf(false) }
-    var renameCategoryOf by remember { mutableStateOf<Category?>(null) }
-    var addItemUnder by remember { mutableStateOf<Category?>(null) }
-    var editItem by remember { mutableStateOf<Pair<Category, Item>?>(null) }
-    var deleteCategoryOf by remember { mutableStateOf<Category?>(null) }
-    var menuFor by remember { mutableStateOf<Category?>(null) }
+    var renameCategoryIdx by remember { mutableStateOf<Int?>(null) }
+    var deleteCategoryIdx by remember { mutableStateOf<Int?>(null) }
+    var addItemUnderCat by remember { mutableStateOf<Int?>(null) }
+    var editItem by remember { mutableStateOf<Triple<Int, Int, String>?>(null) } // catIdx, itemIdx, currentText
+    var moveItemTo by remember { mutableStateOf<Pair<Int, Int>?>(null) } // catIdx, itemIdx
+    var categoryMenuIdx by remember { mutableStateOf<Int?>(null) }
+
+    val cats = state.hyperlist.categories
 
     Scaffold(
         topBar = {
@@ -141,49 +147,72 @@ fun TasksScreen(vm: TasksViewModel) {
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                contentPadding = PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                for (cat in state.hyperlist.categories) {
-                    item(key = "cat:${cat.name}") {
+                cats.forEachIndexed { catIdx, cat ->
+                    item(key = "cat:${cat.name}:$catIdx") {
                         CategoryHeader(
                             category = cat,
                             collapsed = state.collapsed.contains(cat.name),
+                            isFirst = catIdx == 0,
+                            isLast = catIdx == cats.lastIndex,
                             onToggle = { vm.toggleCollapse(cat.name) },
-                            onAddItem = { addItemUnder = cat },
-                            onMenu = { menuFor = cat },
+                            onAddItem = { addItemUnderCat = catIdx },
+                            onMenu = { categoryMenuIdx = catIdx },
                         )
                     }
                     if (!state.collapsed.contains(cat.name)) {
-                        items(cat.items, key = { "it:${cat.name}:${it.text}:${cat.items.indexOf(it)}" }) { item ->
+                        itemsIndexed(cat.items, key = { itemIdx, item -> "it:$catIdx:$itemIdx:${item.text}" }) { itemIdx, item ->
                             ItemRow(
                                 item = item,
-                                onEdit = { editItem = cat to item },
-                                onDelete = { vm.deleteItem(cat, item) },
+                                isFirst = itemIdx == 0,
+                                isLast = itemIdx == cat.items.lastIndex,
+                                onEdit = { editItem = Triple(catIdx, itemIdx, item.text) },
+                                onMoveUp = { vm.moveItemUp(catIdx, itemIdx) },
+                                onMoveDown = { vm.moveItemDown(catIdx, itemIdx) },
+                                onMoveToCat = { moveItemTo = catIdx to itemIdx },
+                                onDelete = { vm.deleteItem(catIdx, itemIdx) },
                             )
                         }
                     }
                 }
-                item { Spacer(Modifier.size(72.dp)) }  // FAB clearance
+                item { Spacer(Modifier.size(72.dp)) } // FAB clearance
             }
         }
 
-        menuFor?.let { cat ->
-            DropdownMenu(expanded = true, onDismissRequest = { menuFor = null }) {
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    leadingIcon = { Icon(Icons.Filled.Edit, null) },
-                    onClick = { renameCategoryOf = cat; menuFor = null },
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete (and items)") },
-                    leadingIcon = { Icon(Icons.Filled.Delete, null) },
-                    onClick = { deleteCategoryOf = cat; menuFor = null },
-                )
+        categoryMenuIdx?.let { idx ->
+            val cat = cats.getOrNull(idx)
+            if (cat != null) {
+                DropdownMenu(expanded = true, onDismissRequest = { categoryMenuIdx = null }) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Filled.Edit, null) },
+                        onClick = { renameCategoryIdx = idx; categoryMenuIdx = null },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move up") },
+                        leadingIcon = { Icon(Icons.Filled.ArrowUpward, null) },
+                        enabled = idx > 0,
+                        onClick = { vm.moveCategoryUp(idx); categoryMenuIdx = null },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move down") },
+                        leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
+                        enabled = idx < cats.lastIndex,
+                        onClick = { vm.moveCategoryDown(idx); categoryMenuIdx = null },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete (and items)") },
+                        leadingIcon = { Icon(Icons.Filled.Delete, null) },
+                        onClick = { deleteCategoryIdx = idx; categoryMenuIdx = null },
+                    )
+                }
             }
         }
     }
 
+    // ---- Dialogs ----
     if (showAddCategory) {
         TextDialog(
             title = "New category",
@@ -194,51 +223,89 @@ fun TasksScreen(vm: TasksViewModel) {
             },
         )
     }
-    renameCategoryOf?.let { cat ->
+    renameCategoryIdx?.let { idx ->
+        val cat = cats.getOrNull(idx) ?: run { renameCategoryIdx = null; return@let }
         TextDialog(
             title = "Rename category",
             initial = cat.name,
-            onDismiss = { renameCategoryOf = null },
+            onDismiss = { renameCategoryIdx = null },
             onConfirm = { name ->
-                if (name.isNotBlank() && name != cat.name) vm.renameCategory(cat, name.trim())
-                renameCategoryOf = null
+                if (name.isNotBlank() && name != cat.name) vm.renameCategory(idx, name.trim())
+                renameCategoryIdx = null
             },
         )
     }
-    addItemUnder?.let { cat ->
+    addItemUnderCat?.let { idx ->
+        val cat = cats.getOrNull(idx) ?: run { addItemUnderCat = null; return@let }
         TextDialog(
             title = "New item in “${cat.name}”",
-            onDismiss = { addItemUnder = null },
+            onDismiss = { addItemUnderCat = null },
             onConfirm = { text ->
-                if (text.isNotBlank()) vm.addItem(cat, text.trim())
-                addItemUnder = null
+                if (text.isNotBlank()) vm.addItem(idx, text.trim())
+                addItemUnderCat = null
             },
         )
     }
-    editItem?.let { (cat, item) ->
+    editItem?.let { (catIdx, itemIdx, currentText) ->
         TextDialog(
             title = "Edit item",
-            initial = item.text,
+            initial = currentText,
             onDismiss = { editItem = null },
             onConfirm = { text ->
-                if (text.isNotBlank() && text != item.text) vm.renameItem(cat, item, text.trim())
+                if (text.isNotBlank() && text != currentText) vm.renameItem(catIdx, itemIdx, text.trim())
                 editItem = null
             },
         )
     }
-    deleteCategoryOf?.let { cat ->
+    deleteCategoryIdx?.let { idx ->
+        val cat = cats.getOrNull(idx) ?: run { deleteCategoryIdx = null; return@let }
         AlertDialog(
-            onDismissRequest = { deleteCategoryOf = null },
+            onDismissRequest = { deleteCategoryIdx = null },
             title = { Text("Delete “${cat.name}”?") },
             text = { Text("Removes the category and ${cat.items.size} item(s).") },
             confirmButton = {
                 TextButton(onClick = {
-                    vm.deleteCategory(cat); deleteCategoryOf = null
+                    vm.deleteCategory(idx); deleteCategoryIdx = null
                 }) { Text("Delete") }
             },
             dismissButton = {
-                TextButton(onClick = { deleteCategoryOf = null }) { Text("Cancel") }
+                TextButton(onClick = { deleteCategoryIdx = null }) { Text("Cancel") }
             },
+        )
+    }
+    moveItemTo?.let { (fromCatIdx, itemIdx) ->
+        val others = cats.mapIndexedNotNull { i, c -> if (i != fromCatIdx) i to c.name else null }
+        AlertDialog(
+            onDismissRequest = { moveItemTo = null },
+            title = { Text("Move item to…") },
+            text = {
+                if (others.isEmpty()) {
+                    Text("No other categories available.")
+                } else {
+                    Column {
+                        others.forEach { (i, name) ->
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        vm.moveItemToCategory(fromCatIdx, itemIdx, i)
+                                        moveItemTo = null
+                                    },
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(6.dp),
+                            ) {
+                                Text(
+                                    text = name,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                            }
+                            Spacer(Modifier.size(4.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { moveItemTo = null }) { Text("Cancel") } },
         )
     }
 }
@@ -273,6 +340,8 @@ private fun EmptyState(onPick: () -> Unit, modifier: Modifier = Modifier) {
 private fun CategoryHeader(
     category: Category,
     collapsed: Boolean,
+    isFirst: Boolean,
+    isLast: Boolean,
     onToggle: () -> Unit,
     onAddItem: () -> Unit,
     onMenu: () -> Unit,
@@ -319,7 +388,12 @@ private fun CategoryHeader(
 @Composable
 private fun ItemRow(
     item: Item,
+    isFirst: Boolean,
+    isLast: Boolean,
     onEdit: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onMoveToCat: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -351,6 +425,23 @@ private fun ItemRow(
                 text = { Text("Edit") },
                 leadingIcon = { Icon(Icons.Filled.Edit, null) },
                 onClick = { menuOpen = false; onEdit() },
+            )
+            DropdownMenuItem(
+                text = { Text("Move up") },
+                leadingIcon = { Icon(Icons.Filled.ArrowUpward, null) },
+                enabled = !isFirst,
+                onClick = { menuOpen = false; onMoveUp() },
+            )
+            DropdownMenuItem(
+                text = { Text("Move down") },
+                leadingIcon = { Icon(Icons.Filled.ArrowDownward, null) },
+                enabled = !isLast,
+                onClick = { menuOpen = false; onMoveDown() },
+            )
+            DropdownMenuItem(
+                text = { Text("Move to category…") },
+                leadingIcon = { Icon(Icons.Filled.DriveFileMove, null) },
+                onClick = { menuOpen = false; onMoveToCat() },
             )
             DropdownMenuItem(
                 text = { Text("Delete") },

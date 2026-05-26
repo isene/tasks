@@ -5,9 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.isene.tasks.data.Category
 import com.isene.tasks.data.Hyperlist
-import com.isene.tasks.data.Item
 import com.isene.tasks.data.TaskRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,9 +50,7 @@ class TasksViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Caller passes the URI returned by ActivityResultContracts.OpenDocument. */
     fun onFilePicked(uri: Uri) {
-        // Persist permission so it survives reboots.
         val resolver = getApplication<Application>().contentResolver
         try {
             resolver.takePersistableUriPermission(
@@ -63,8 +59,7 @@ class TasksViewModel(app: Application) : AndroidViewModel(app) {
                     android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
         } catch (e: SecurityException) {
-            // Some providers (e.g. download manager) don't grant persistence —
-            // user will have to re-pick after process death. Not fatal.
+            // Some providers won't persist — re-pick after process death.
         }
         prefs.edit().putString(KEY_URI, uri.toString()).apply()
         _state.value = _state.value.copy(
@@ -87,7 +82,6 @@ class TasksViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Cheap external-change check; called from the foreground lifecycle. */
     fun reloadIfChanged() {
         val uri = _state.value.pickedUri ?: return
         viewModelScope.launch(Dispatchers.IO) {
@@ -99,20 +93,39 @@ class TasksViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun mutate(block: (Hyperlist) -> Unit) {
-        val hl = _state.value.hyperlist
-        block(hl)
-        // Trigger recomposition by emitting a shallow copy.
-        _state.value = _state.value.copy(hyperlist = hl.copy(categories = hl.categories.toMutableList()))
+    /** Apply a Hyperlist → Hyperlist transformation, update state, persist. */
+    private fun apply(transform: (Hyperlist) -> Hyperlist) {
+        val next = transform(_state.value.hyperlist)
+        if (next === _state.value.hyperlist) return
+        _state.value = _state.value.copy(hyperlist = next)
         persist()
     }
 
-    fun addCategory(name: String) = mutate { it.addCategory(name) }
-    fun renameCategory(category: Category, newName: String) = mutate { it.renameCategory(category, newName) }
-    fun deleteCategory(category: Category) = mutate { it.deleteCategory(category) }
-    fun addItem(category: Category, text: String) = mutate { it.addItem(category, text) }
-    fun renameItem(category: Category, item: Item, newText: String) = mutate { it.renameItem(category, item, newText) }
-    fun deleteItem(category: Category, item: Item) = mutate { it.deleteItem(category, item) }
+    // Category ops
+    fun addCategory(name: String) = apply { it.addCategory(name) }
+    fun renameCategory(catIdx: Int, newName: String) = apply { it.renameCategory(catIdx, newName) }
+    fun deleteCategory(catIdx: Int) {
+        // Also drop its collapsed-state entry by name if present
+        val name = _state.value.hyperlist.categories.getOrNull(catIdx)?.name
+        apply { it.deleteCategory(catIdx) }
+        if (name != null && _state.value.collapsed.contains(name)) {
+            val next = _state.value.collapsed - name
+            _state.value = _state.value.copy(collapsed = next)
+            prefs.edit().putStringSet(KEY_COLLAPSED, next).apply()
+        }
+    }
+    fun moveCategoryUp(catIdx: Int) = apply { it.moveCategoryUp(catIdx) }
+    fun moveCategoryDown(catIdx: Int) = apply { it.moveCategoryDown(catIdx) }
+
+    // Item ops
+    fun addItem(catIdx: Int, text: String) = apply { it.addItem(catIdx, text) }
+    fun renameItem(catIdx: Int, itemIdx: Int, newText: String) =
+        apply { it.renameItem(catIdx, itemIdx, newText) }
+    fun deleteItem(catIdx: Int, itemIdx: Int) = apply { it.deleteItem(catIdx, itemIdx) }
+    fun moveItemUp(catIdx: Int, itemIdx: Int) = apply { it.moveItemUp(catIdx, itemIdx) }
+    fun moveItemDown(catIdx: Int, itemIdx: Int) = apply { it.moveItemDown(catIdx, itemIdx) }
+    fun moveItemToCategory(fromCatIdx: Int, itemIdx: Int, toCatIdx: Int) =
+        apply { it.moveItemToCategory(fromCatIdx, itemIdx, toCatIdx) }
 
     fun toggleCollapse(name: String) {
         val cur = _state.value.collapsed

@@ -121,6 +121,64 @@ data class Hyperlist(val categories: List<Category> = emptyList()) {
         })
     }
 
+    /**
+     * Move an item to a specific (categoryIndex, position) destination.
+     * `toItemIdx` is the position WITHIN the destination category's items
+     * list AFTER the source has been removed (so callers can pass the
+     * raw "drop here" index without worrying about offset shifts when
+     * the source comes from the same category).
+     */
+    fun moveItemTo(fromCatIdx: Int, fromItemIdx: Int, toCatIdx: Int, toItemIdx: Int): Hyperlist {
+        val src = categories.getOrNull(fromCatIdx) ?: return this
+        val item = src.items.getOrNull(fromItemIdx) ?: return this
+        // Remove from source first.
+        val withRemoved = copy(categories = categories.mapIndexed { i, c ->
+            if (i == fromCatIdx) c.copy(items = c.items.filterIndexed { j, _ -> j != fromItemIdx }) else c
+        })
+        val targetCat = withRemoved.categories.getOrNull(toCatIdx) ?: return this
+        val clamped = toItemIdx.coerceIn(0, targetCat.items.size)
+        return withRemoved.copy(categories = withRemoved.categories.mapIndexed { i, c ->
+            if (i == toCatIdx) {
+                val newItems = c.items.toMutableList()
+                newItems.add(clamped, item)
+                c.copy(items = newItems)
+            } else c
+        })
+    }
+
+    /** Move a category to a new index. Items move with it as a block. */
+    fun moveCategoryTo(fromIdx: Int, toIdx: Int): Hyperlist {
+        val cat = categories.getOrNull(fromIdx) ?: return this
+        val without = categories.toMutableList().also { it.removeAt(fromIdx) }
+        val clamped = toIdx.coerceIn(0, without.size)
+        without.add(clamped, cat)
+        return copy(categories = without)
+    }
+
+    // ---- Flat row representation (for the LazyColumn drag-reorder) ----
+
+    sealed class Row {
+        data class Header(val catIdx: Int) : Row()
+        data class Item(val catIdx: Int, val itemIdx: Int) : Row()
+    }
+
+    /**
+     * Flatten the hyperlist into the row order shown on screen. Items
+     * belonging to a category in `collapsed` are omitted. Used by the
+     * UI's LazyColumn AND by the drag-resolver in the ViewModel so
+     * indices stay in sync between layers.
+     */
+    fun flatRows(collapsed: Set<String>): List<Row> {
+        val out = mutableListOf<Row>()
+        categories.forEachIndexed { catIdx, c ->
+            out.add(Row.Header(catIdx))
+            if (!collapsed.contains(c.name)) {
+                c.items.indices.forEach { itemIdx -> out.add(Row.Item(catIdx, itemIdx)) }
+            }
+        }
+        return out
+    }
+
     // ---- Serialization ----
 
     fun serialize(): String {

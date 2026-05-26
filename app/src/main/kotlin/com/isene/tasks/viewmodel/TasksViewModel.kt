@@ -127,6 +127,54 @@ class TasksViewModel(app: Application) : AndroidViewModel(app) {
     fun moveItemToCategory(fromCatIdx: Int, itemIdx: Int, toCatIdx: Int) =
         apply { it.moveItemToCategory(fromCatIdx, itemIdx, toCatIdx) }
 
+    /**
+     * Resolve a flat-row drag (from, to indices into the visible
+     * LazyColumn) into a semantic move on the Hyperlist:
+     *
+     * - Header dragged → category reorder (items follow as a block).
+     *   The drop position rounds to the nearest category boundary.
+     * - Item dragged → moves to whichever category contains the target
+     *   slot. If dropped on a Header slot it lands at position 0 of
+     *   that category. If dropped on an Item slot it inserts at that
+     *   item's position.
+     *
+     * The flat-row list is recomputed from the current state +
+     * collapsed set so the resolver always agrees with what's
+     * actually on screen.
+     */
+    fun onDragMove(fromFlat: Int, toFlat: Int) {
+        if (fromFlat == toFlat) return
+        val hl = _state.value.hyperlist
+        val collapsed = _state.value.collapsed
+        val rows = hl.flatRows(collapsed)
+        val src = rows.getOrNull(fromFlat) ?: return
+        val dst = rows.getOrNull(toFlat) ?: rows.lastOrNull() ?: return
+
+        val next = when (src) {
+            is com.isene.tasks.data.Hyperlist.Row.Header -> {
+                // Category move. Resolve dst → target category index.
+                val targetCatIdx = when (dst) {
+                    is com.isene.tasks.data.Hyperlist.Row.Header -> dst.catIdx
+                    is com.isene.tasks.data.Hyperlist.Row.Item   -> dst.catIdx
+                }
+                hl.moveCategoryTo(src.catIdx, targetCatIdx)
+            }
+            is com.isene.tasks.data.Hyperlist.Row.Item -> {
+                when (dst) {
+                    is com.isene.tasks.data.Hyperlist.Row.Header ->
+                        // Dropped on a category header → land at top of that category.
+                        hl.moveItemTo(src.catIdx, src.itemIdx, dst.catIdx, 0)
+                    is com.isene.tasks.data.Hyperlist.Row.Item ->
+                        // Dropped on an item → take that item's slot.
+                        hl.moveItemTo(src.catIdx, src.itemIdx, dst.catIdx, dst.itemIdx)
+                }
+            }
+        }
+        if (next === hl) return
+        _state.value = _state.value.copy(hyperlist = next)
+        persist()
+    }
+
     fun toggleCollapse(name: String) {
         val cur = _state.value.collapsed
         val next = if (cur.contains(name)) cur - name else cur + name

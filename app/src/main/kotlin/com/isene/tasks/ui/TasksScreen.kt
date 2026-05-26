@@ -17,12 +17,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -65,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.isene.tasks.data.Category
+import com.isene.tasks.data.Hyperlist
 import com.isene.tasks.data.Item
 import com.isene.tasks.viewmodel.TasksViewModel
 import kotlinx.coroutines.launch
@@ -107,6 +112,13 @@ fun TasksScreen(vm: TasksViewModel) {
     var categoryMenuIdx by remember { mutableStateOf<Int?>(null) }
 
     val cats = state.hyperlist.categories
+    val rows = state.hyperlist.flatRows(state.collapsed)
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        // Skip the leading list-header item (no flat-row index for it).
+        // Our rows start at LazyColumn index 0 directly.
+        vm.onDragMove(from.index, to.index)
+    }
 
     Scaffold(
         topBar = {
@@ -146,34 +158,61 @@ fun TasksScreen(vm: TasksViewModel) {
             EmptyState(onPick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.padding(inner))
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize().padding(inner),
                 contentPadding = PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                cats.forEachIndexed { catIdx, cat ->
-                    item(key = "cat:${cat.name}:$catIdx") {
-                        CategoryHeader(
-                            category = cat,
-                            collapsed = state.collapsed.contains(cat.name),
-                            isFirst = catIdx == 0,
-                            isLast = catIdx == cats.lastIndex,
-                            onToggle = { vm.toggleCollapse(cat.name) },
-                            onAddItem = { addItemUnderCat = catIdx },
-                            onMenu = { categoryMenuIdx = catIdx },
-                        )
+                items(rows, key = { row ->
+                    when (row) {
+                        is Hyperlist.Row.Header -> "cat:${row.catIdx}:${cats.getOrNull(row.catIdx)?.name.orEmpty()}"
+                        is Hyperlist.Row.Item   -> {
+                            val it = cats.getOrNull(row.catIdx)?.items?.getOrNull(row.itemIdx)
+                            "it:${row.catIdx}:${row.itemIdx}:${it?.text.orEmpty()}"
+                        }
                     }
-                    if (!state.collapsed.contains(cat.name)) {
-                        itemsIndexed(cat.items, key = { itemIdx, item -> "it:$catIdx:$itemIdx:${item.text}" }) { itemIdx, item ->
-                            ItemRow(
-                                item = item,
-                                isFirst = itemIdx == 0,
-                                isLast = itemIdx == cat.items.lastIndex,
-                                onEdit = { editItem = Triple(catIdx, itemIdx, item.text) },
-                                onMoveUp = { vm.moveItemUp(catIdx, itemIdx) },
-                                onMoveDown = { vm.moveItemDown(catIdx, itemIdx) },
-                                onMoveToCat = { moveItemTo = catIdx to itemIdx },
-                                onDelete = { vm.deleteItem(catIdx, itemIdx) },
-                            )
+                }) { row ->
+                    val key = when (row) {
+                        is Hyperlist.Row.Header -> "cat:${row.catIdx}:${cats.getOrNull(row.catIdx)?.name.orEmpty()}"
+                        is Hyperlist.Row.Item   -> {
+                            val it = cats.getOrNull(row.catIdx)?.items?.getOrNull(row.itemIdx)
+                            "it:${row.catIdx}:${row.itemIdx}:${it?.text.orEmpty()}"
+                        }
+                    }
+                    ReorderableItem(reorderState, key = key) { _ ->
+                        when (row) {
+                            is Hyperlist.Row.Header -> {
+                                val cat = cats.getOrNull(row.catIdx)
+                                if (cat != null) {
+                                    CategoryHeader(
+                                        category = cat,
+                                        collapsed = state.collapsed.contains(cat.name),
+                                        isFirst = row.catIdx == 0,
+                                        isLast = row.catIdx == cats.lastIndex,
+                                        onToggle = { vm.toggleCollapse(cat.name) },
+                                        onAddItem = { addItemUnderCat = row.catIdx },
+                                        onMenu = { categoryMenuIdx = row.catIdx },
+                                        dragHandle = Modifier.draggableHandle(),
+                                    )
+                                }
+                            }
+                            is Hyperlist.Row.Item -> {
+                                val cat = cats.getOrNull(row.catIdx)
+                                val item = cat?.items?.getOrNull(row.itemIdx)
+                                if (cat != null && item != null) {
+                                    ItemRow(
+                                        item = item,
+                                        isFirst = row.itemIdx == 0,
+                                        isLast = row.itemIdx == cat.items.lastIndex,
+                                        onEdit = { editItem = Triple(row.catIdx, row.itemIdx, item.text) },
+                                        onMoveUp = { vm.moveItemUp(row.catIdx, row.itemIdx) },
+                                        onMoveDown = { vm.moveItemDown(row.catIdx, row.itemIdx) },
+                                        onMoveToCat = { moveItemTo = row.catIdx to row.itemIdx },
+                                        onDelete = { vm.deleteItem(row.catIdx, row.itemIdx) },
+                                        dragHandle = Modifier.draggableHandle(),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -345,6 +384,7 @@ private fun CategoryHeader(
     onToggle: () -> Unit,
     onAddItem: () -> Unit,
     onMenu: () -> Unit,
+    dragHandle: Modifier = Modifier,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -381,6 +421,12 @@ private fun CategoryHeader(
             IconButton(onClick = onMenu) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "Category menu")
             }
+            // Drag handle on the trailing edge — long-press to start a drag.
+            Icon(
+                imageVector = Icons.Filled.DragHandle,
+                contentDescription = "Drag to reorder",
+                modifier = dragHandle.padding(start = 4.dp),
+            )
         }
     }
 }
@@ -395,6 +441,7 @@ private fun ItemRow(
     onMoveDown: () -> Unit,
     onMoveToCat: () -> Unit,
     onDelete: () -> Unit,
+    dragHandle: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
@@ -418,6 +465,11 @@ private fun ItemRow(
                 IconButton(onClick = { menuOpen = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "Item menu")
                 }
+                Icon(
+                    imageVector = Icons.Filled.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    modifier = dragHandle.padding(start = 4.dp),
+                )
             }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

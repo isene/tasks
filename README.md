@@ -1,5 +1,9 @@
 # tasks
 
+> **Archived.** The tasks app is now the Tasks tab of
+> [gluon](https://github.com/isene/nomad/tree/master/apps/gluon), the
+> phone app for mail, calendar and tasks.
+
 <img src="img/tasks.svg" align="right" width="150">
 
 **Sideload-only Android app for editing a hyperlist `todo.hl` synced from your laptop.**
